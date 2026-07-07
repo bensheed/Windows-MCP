@@ -356,11 +356,85 @@ class PipeServer:
         logger.info("Pipe server loop exited")
 
 
+def _client_is_console_user(handle: Any) -> bool:
+    """Return True iff the connected pipe client is the active console user.
+
+    Defence in depth beyond the pipe DACL: the DACL controls *who may open* the
+    pipe (SYSTEM + the console user, or NT AUTHORITY\\INTERACTIVE at boot before a
+    console user can be resolved), but the boot-time INTERACTIVE fallback is
+    broader than the intended console-user binding. So the SYSTEM service also
+    verifies *who actually connected* before doing any privileged work: it
+    impersonates the client, reads its token's user SID and session id, and
+    requires both to match the active console session's user. Any other
+    interactive session, or a non-console caller that slipped through the
+    INTERACTIVE fallback, is rejected even though it could open the pipe.
+
+    Fails closed: any error, or the absence of an active console user, rejects.
+    """
+    if not _WIN32_AVAILABLE:
+        return False
+    import win32ts
+    import win32api
+    import win32con
+
+    console_sid = _console_user_sid()
+    if console_sid is None:
+        logger.warning("Rejecting pipe client: no active console user to authorize against")
+        return False
+    try:
+        active_session = win32ts.WTSGetActiveConsoleSessionId()
+    except Exception:
+        active_session = None
+
+    try:
+        win32pipe.ImpersonateNamedPipeClient(handle)
+    except Exception as exc:
+        logger.warning("ImpersonateNamedPipeClient failed; rejecting client: %s", exc)
+        return False
+    try:
+        thread_token = win32security.OpenThreadToken(
+            win32api.GetCurrentThread(), win32con.TOKEN_QUERY, True
+        )
+        try:
+            client_sid = win32security.GetTokenInformation(
+                thread_token, win32security.TokenUser
+            )[0]
+            client_session = win32security.GetTokenInformation(
+                thread_token, win32security.TokenSessionId
+            )
+        finally:
+            win32api.CloseHandle(thread_token)
+    except Exception as exc:
+        logger.warning("Could not read pipe client token; rejecting: %s", exc)
+        return False
+    finally:
+        try:
+            win32security.RevertToSelf()
+        except Exception:
+            logger.exception("RevertToSelf failed after impersonating pipe client")
+
+    if not win32security.EqualSid(client_sid, console_sid):
+        logger.warning("Rejecting pipe client: user SID does not match the console user")
+        return False
+    if active_session is not None and client_session != active_session:
+        logger.warning(
+            "Rejecting pipe client: client session %s != active console session %s",
+            client_session, active_session,
+        )
+        return False
+    return True
+
+
 def _serve_one_client(handle: Any) -> None:
     """Read one request, write one response, close the connection."""
     try:
         _, data = win32file.ReadFile(handle, PIPE_BUFFER_SIZE)
         req = Request.decode(data)
+        if not _client_is_console_user(handle):
+            resp = Response(id=req.id, error="unauthorized: caller is not the console user")
+            win32file.WriteFile(handle, resp.encode())
+            win32file.FlushFileBuffers(handle)
+            return
         resp = _dispatch(req)
         win32file.WriteFile(handle, resp.encode())
         # FlushFileBuffers blocks until the client has read the response.
