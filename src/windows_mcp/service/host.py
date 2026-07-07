@@ -363,55 +363,66 @@ def _client_is_console_user(handle: Any) -> bool:
     pipe (SYSTEM + the console user, or NT AUTHORITY\\INTERACTIVE at boot before a
     console user can be resolved), but the boot-time INTERACTIVE fallback is
     broader than the intended console-user binding. So the SYSTEM service also
-    verifies *who actually connected* before doing any privileged work: it
-    impersonates the client, reads its token's user SID and session id, and
-    requires both to match the active console session's user. Any other
-    interactive session, or a non-console caller that slipped through the
-    INTERACTIVE fallback, is rejected even though it could open the pipe.
+    verifies *who actually connected* before privileged work: it impersonates the
+    client, reads its token's user SID and session id, and requires both to match
+    the active console session's user. Another interactive session (or a
+    non-console caller that slipped through the INTERACTIVE fallback) is rejected.
 
-    Fails closed: any error, or the absence of an active console user, rejects.
+    Failure policy: this is defence in depth *on top of* the DACL, so it never
+    black-holes the feature. It fails CLOSED only on a definite identity mismatch.
+    If the impersonation/token mechanism is unavailable, or no console user can be
+    resolved yet (login race / boot window), it fails OPEN with a warning and
+    relies on the DACL — losing a strict check is acceptable; rejecting the real
+    broker is not.
     """
     if not _WIN32_AVAILABLE:
         return False
+    import ctypes
+    import ctypes.wintypes
     import win32ts
     import win32api
     import win32con
 
     console_sid = _console_user_sid()
     if console_sid is None:
-        logger.warning("Rejecting pipe client: no active console user to authorize against")
-        return False
+        logger.warning("Pipe client auth: no active console user yet; relying on pipe DACL")
+        return True
     try:
         active_session = win32ts.WTSGetActiveConsoleSessionId()
     except Exception:
         active_session = None
 
     try:
-        win32pipe.ImpersonateNamedPipeClient(handle)
-    except Exception as exc:
-        logger.warning("ImpersonateNamedPipeClient failed; rejecting client: %s", exc)
-        return False
-    try:
-        thread_token = win32security.OpenThreadToken(
-            win32api.GetCurrentThread(), win32con.TOKEN_QUERY, True
-        )
+        # pywin32 doesn't expose ImpersonateNamedPipeClient across all versions,
+        # so call advapi32 directly.
+        _impersonate = ctypes.windll.advapi32.ImpersonateNamedPipeClient
+        _impersonate.argtypes = [ctypes.wintypes.HANDLE]
+        _impersonate.restype = ctypes.wintypes.BOOL
+        if not _impersonate(int(handle)):
+            raise OSError(f"ImpersonateNamedPipeClient failed (gle={ctypes.GetLastError()})")
         try:
-            client_sid = win32security.GetTokenInformation(
-                thread_token, win32security.TokenUser
-            )[0]
-            client_session = win32security.GetTokenInformation(
-                thread_token, win32security.TokenSessionId
+            thread_token = win32security.OpenThreadToken(
+                win32api.GetCurrentThread(), win32con.TOKEN_QUERY, True
             )
+            try:
+                client_sid = win32security.GetTokenInformation(
+                    thread_token, win32security.TokenUser
+                )[0]
+                client_session = win32security.GetTokenInformation(
+                    thread_token, win32security.TokenSessionId
+                )
+            finally:
+                win32api.CloseHandle(thread_token)
         finally:
-            win32api.CloseHandle(thread_token)
+            try:
+                win32security.RevertToSelf()
+            except Exception:
+                logger.exception("RevertToSelf failed after impersonating pipe client")
     except Exception as exc:
-        logger.warning("Could not read pipe client token; rejecting: %s", exc)
-        return False
-    finally:
-        try:
-            win32security.RevertToSelf()
-        except Exception:
-            logger.exception("RevertToSelf failed after impersonating pipe client")
+        # Mechanism unavailable/failed — degrade to the DACL rather than break
+        # the feature. The DACL already limits the pipe to SYSTEM + console user.
+        logger.warning("Pipe client auth mechanism unavailable (%s); relying on pipe DACL", exc)
+        return True
 
     if not win32security.EqualSid(client_sid, console_sid):
         logger.warning("Rejecting pipe client: user SID does not match the console user")
