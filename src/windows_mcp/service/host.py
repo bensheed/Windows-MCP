@@ -392,40 +392,50 @@ def _client_is_console_user(handle: Any) -> bool:
     except Exception:
         active_session = None
 
+    # This pywin32 build is missing several win32security/win32pipe bindings
+    # (ImpersonateNamedPipeClient, EqualSid, RevertToSelf), so use ctypes/advapi32
+    # for the impersonation calls and compare SIDs via ConvertSidToStringSid
+    # (which IS present — _console_user_sid relies on it). EVERY mechanism call is
+    # inside this guard: a missing/failing API degrades to the DACL (fail open),
+    # never crashes the pipe handler; only a definite mismatch fails closed.
+    _advapi32 = ctypes.windll.advapi32
+    impersonated = False
     try:
-        # pywin32 doesn't expose ImpersonateNamedPipeClient across all versions,
-        # so call advapi32 directly.
-        _impersonate = ctypes.windll.advapi32.ImpersonateNamedPipeClient
-        _impersonate.argtypes = [ctypes.wintypes.HANDLE]
-        _impersonate.restype = ctypes.wintypes.BOOL
-        if not _impersonate(int(handle)):
+        _imp = _advapi32.ImpersonateNamedPipeClient
+        _imp.argtypes = [ctypes.wintypes.HANDLE]
+        _imp.restype = ctypes.wintypes.BOOL
+        if not _imp(int(handle)):
             raise OSError(f"ImpersonateNamedPipeClient failed (gle={ctypes.GetLastError()})")
+        impersonated = True
+        thread_token = win32security.OpenThreadToken(
+            win32api.GetCurrentThread(), win32con.TOKEN_QUERY, True
+        )
         try:
-            thread_token = win32security.OpenThreadToken(
-                win32api.GetCurrentThread(), win32con.TOKEN_QUERY, True
+            client_sid = win32security.GetTokenInformation(
+                thread_token, win32security.TokenUser
+            )[0]
+            client_session = win32security.GetTokenInformation(
+                thread_token, win32security.TokenSessionId
             )
-            try:
-                client_sid = win32security.GetTokenInformation(
-                    thread_token, win32security.TokenUser
-                )[0]
-                client_session = win32security.GetTokenInformation(
-                    thread_token, win32security.TokenSessionId
-                )
-            finally:
-                win32api.CloseHandle(thread_token)
+            client_sid_str = win32security.ConvertSidToStringSid(client_sid)
+            console_sid_str = win32security.ConvertSidToStringSid(console_sid)
         finally:
-            try:
-                win32security.RevertToSelf()
-            except Exception:
-                logger.exception("RevertToSelf failed after impersonating pipe client")
+            win32api.CloseHandle(thread_token)
     except Exception as exc:
-        # Mechanism unavailable/failed — degrade to the DACL rather than break
-        # the feature. The DACL already limits the pipe to SYSTEM + console user.
         logger.warning("Pipe client auth mechanism unavailable (%s); relying on pipe DACL", exc)
         return True
+    finally:
+        if impersonated:
+            try:
+                _advapi32.RevertToSelf()
+            except Exception:
+                logger.exception("RevertToSelf failed after impersonating pipe client")
 
-    if not win32security.EqualSid(client_sid, console_sid):
-        logger.warning("Rejecting pipe client: user SID does not match the console user")
+    if client_sid_str != console_sid_str:
+        logger.warning(
+            "Rejecting pipe client: user SID %s does not match console user %s",
+            client_sid_str, console_sid_str,
+        )
         return False
     if active_session is not None and client_session != active_session:
         logger.warning(
