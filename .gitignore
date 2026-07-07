@@ -169,3 +169,6 @@ sandbox
 *.mcpb
 .idea/
 node_modules
+
+# Local-only VM e2e harness (dev tooling; not shipped — recoverable from git history)
+/tests/manual/vm_e2e/
