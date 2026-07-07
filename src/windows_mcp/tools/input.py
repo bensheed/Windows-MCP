@@ -51,7 +51,16 @@ def register(mcp, *, get_desktop, get_analytics):
         if len(loc) != 2:
             raise ValueError("Location must be a list of exactly 2 integers [x, y]")
         x, y = loc[0], loc[1]
-        desktop.click(loc=loc, button=button, clicks=clicks)
+        from windows_mcp.service.pipe import HostPolicyDenied
+
+        try:
+            desktop.click(loc=loc, button=button, clicks=clicks)
+        except HostPolicyDenied as exc:
+            return (
+                f"Click refused at ({x},{y}): the Secure-Desktop consent policy denied "
+                f"auto-clicking the UAC dialog ({exc}). A human must approve/deny it, or "
+                f"change the policy via 'windows-mcp service secure-desktop set-policy'."
+            )
         num_clicks = {0: "Hover", 1: "Single", 2: "Double"}
         return f"{num_clicks.get(clicks)} {button} clicked at ({x},{y})."
 

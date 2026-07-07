@@ -32,6 +32,16 @@ except ImportError:
 _AVAILABILITY_CACHE_TTL = 30.0
 
 
+class HostPolicyDenied(RuntimeError):
+    """Raised when the host service refuses an operation because the Secure-Desktop
+    consent policy denied it (e.g. policy=block).
+
+    Distinct from a generic host/pipe error so callers can tell "the policy said no"
+    apart from "the service is unavailable / a transient failure" — the former must
+    be surfaced to the agent, never silently retried as a local click.
+    """
+
+
 class HostServiceClient:
     """Client for the Windows MCP host service named pipe."""
 
@@ -114,6 +124,8 @@ class HostServiceClient:
 
         resp = Response.decode(data)
         if resp.error:
+            if "policy denied" in resp.error.lower():
+                raise HostPolicyDenied(resp.error)
             raise RuntimeError(f"Host service error ({method}): {resp.error}")
         return resp.result
 

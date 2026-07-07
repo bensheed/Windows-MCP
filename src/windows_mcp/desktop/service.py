@@ -68,9 +68,16 @@ def _route_click_through_host(x: int, y: int) -> bool:
     """Best-effort click via the SYSTEM host service. Returns True if it took.
 
     Lazy-imports the pipe client so non-UAC code paths don't pay the cost.
+
+    Raises ``HostPolicyDenied`` when the consent policy refused the click: that
+    is an authoritative "no" from the SYSTEM service and must NOT be masked by a
+    local fallback click (which would silently no-op against the System-integrity
+    dialog while the Click tool reports success). Other failures (service not
+    installed, transient pipe errors) return False so the caller may fall back.
     """
+    from windows_mcp.service.pipe import get_client, HostPolicyDenied
+
     try:
-        from windows_mcp.service.pipe import get_client
         client = get_client()
         if not client.is_available():
             return False
@@ -78,6 +85,9 @@ def _route_click_through_host(x: int, y: int) -> bool:
         if ok:
             logger.info("Click(%d,%d) routed through host UIAccess worker", x, y)
         return ok
+    except HostPolicyDenied:
+        # Deliberate policy refusal — propagate so the Click tool surfaces it.
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("host-routed click failed, falling back to local: %s", exc)
         return False

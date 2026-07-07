@@ -12,16 +12,29 @@ broker cannot see the Secure Desktop on its own.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
-from fastmcp import Context
+from fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from windows_mcp.infrastructure import with_analytics
 
 
-def register(mcp, *, get_desktop, get_analytics):
+def register(
+    mcp: FastMCP,
+    *,
+    get_desktop: Callable[[], object],
+    get_analytics: Callable[[], object],
+) -> None:
+    """Register the WaitForUACPrompt tool on the given FastMCP server.
+
+    Args:
+        mcp: The FastMCP server instance to register the tool on.
+        get_desktop: Zero-arg callable returning the shared ``Desktop`` service.
+        get_analytics: Zero-arg callable returning the shared analytics client
+            (used by the ``@with_analytics`` decorator).
+    """
     @mcp.tool(
         name="WaitForUACPrompt",
         description=(

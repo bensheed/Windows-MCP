@@ -200,9 +200,9 @@ def write_config(cfg: WindowsMCPConfig, path: Path) -> None:
     if sd_cfg.policy != sd_def.policy:
         sd_lines.append(f'policy = "{sd_cfg.policy}"')
     if sd_cfg.publishers_allowlist:
-        items = ', '.join(f'"{p}"' for p in sd_cfg.publishers_allowlist)
-        sd_lines.append(f'publishers_allowlist = [{items}]')
+        items = ", ".join(f'"{p}"' for p in sd_cfg.publishers_allowlist)
+        sd_lines.append(f"publishers_allowlist = [{items}]")
     if sd_lines:
-        lines += ['[secure_desktop]'] + sd_lines + ['']
+        lines += ["[secure_desktop]"] + sd_lines + [""]
 
     path.write_text('\n'.join(lines), encoding='utf-8')
