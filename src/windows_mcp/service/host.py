@@ -244,11 +244,23 @@ def _enforce_policy(operation: str) -> tuple[bool, str]:
     the desktop check is dropped in favour of unconditional enforcement.
     """
     pol = policy.read_from_registry()
-    try:
-        publisher = secure_desktop._spawn_in_user_session("publisher", timeout=15.0)
-    except Exception as exc:
-        logger.warning("policy: user-session publisher lookup failed: %s", exc)
-        publisher = None
+    # Only allow_with_match needs the verified publisher (allow_all / block decide
+    # without it). Reading it means spawning the user-session worker scoped to
+    # consent.exe's pid — the same scoping wait_for_uac_prompt uses; without the
+    # pid the worker can't reach the System-integrity dialog and returns None, so
+    # allow_with_match would always refuse. Skip the whole lookup when the policy
+    # doesn't need it.
+    publisher = None
+    if pol.policy == "allow_with_match":
+        try:
+            consent_pid = secure_desktop._find_consent_pid()
+            pid_args = (f"--consent-pid={consent_pid}",) if consent_pid else ()
+            publisher = secure_desktop._spawn_in_user_session(
+                "publisher", *pid_args, timeout=15.0
+            )
+        except Exception as exc:
+            logger.warning("policy: user-session publisher lookup failed: %s", exc)
+            publisher = None
     allowed, reason = pol.allows_auto_click(publisher)
     logger.info(
         "policy check: op=%s policy=%s publisher=%r → %s (%s)",
