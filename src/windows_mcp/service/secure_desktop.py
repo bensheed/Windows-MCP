@@ -1021,9 +1021,16 @@ def uia_click_at(x: int, y: int) -> bool:
 # Patterns the Windows UAC dialog uses for its "verified publisher" line.
 # These are localised on non-English Windows; if no pattern matches we return None
 # and the allow_with_match policy refuses on caller side.
+#
+# Only lines that identify the PUBLISHER belong here. The "Program name:" line is
+# deliberately excluded: allow_with_match matches against publishers_allowlist, so
+# reading the program name as the publisher would be both wrong (a signed binary's
+# program name rarely equals its publisher) and unsafe (an untrusted, unsigned app
+# named e.g. "Microsoft Corporation" would match an allowlist entry "Microsoft"
+# while its real publisher is unknown). "Verified publisher:" is tried first -- it
+# is the trustworthy, signed-binary line -- before the more generic "Publisher:".
 _PUBLISHER_PATTERNS = [
     re.compile(r"Verified publisher:\s*(.+)", re.IGNORECASE),
-    re.compile(r"Program name:\s*(.+)", re.IGNORECASE),
     re.compile(r"Publisher:\s*(.+)", re.IGNORECASE),
 ]
 
@@ -1095,6 +1102,18 @@ def get_uac_publisher(consent_pid: int = 0) -> str | None:
                 match = pat.search(text)
                 if match:
                     return match.group(1).strip()
+            # No publisher line among the walkable names. On modern Win11 the
+            # consent.exe dialog body is XAML/Composition the UIA walker cannot
+            # descend into cross-integrity, so `collected` is typically just the
+            # frame title ("User Account Control") with no "Verified publisher:"
+            # line -- allow_with_match then fail-closes (refuses) for want of a
+            # match. Log what we could read so operators can tell "publisher not
+            # exposed by this Windows build" apart from "regex/localisation miss".
+            logger.info(
+                "get_uac_publisher: no publisher line in %d walkable name(s): %r",
+                len(collected),
+                collected[:40],
+            )
             return None
 
     try:
