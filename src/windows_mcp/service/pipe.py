@@ -42,6 +42,17 @@ class HostPolicyDenied(RuntimeError):
     """
 
 
+class HostClickFailed(RuntimeError):
+    """Raised when a click on a UAC ``consent.exe`` dialog could not be completed
+    through the host service (service not installed/reachable, worker error, or the
+    routed click did not take).
+
+    consent.exe runs at System integrity, so a medium-integrity local click can
+    never dismiss it — a fallback would silently no-op while the Click tool reports
+    success. This is raised so the caller surfaces the failure instead.
+    """
+
+
 class HostServiceClient:
     """Client for the Windows MCP host service named pipe."""
 

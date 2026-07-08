@@ -703,8 +703,20 @@ class Desktop:
         # SYSTEM host service has a UIAccess-tokened user-session worker
         # that CAN invoke across integrity; route the click there if the
         # target pixel is owned by consent.exe.
-        if _is_consent_target(x, y) and _route_click_through_host(x, y):
-            return
+        if _is_consent_target(x, y):
+            # A local click can never dismiss a System-integrity UAC dialog, so
+            # do NOT fall back to one and report success. Surface the outcome:
+            # _route_click_through_host raises HostPolicyDenied on a policy
+            # refusal; a False return means it could not be completed at all.
+            if _route_click_through_host(x, y):
+                return
+            from windows_mcp.service.pipe import HostClickFailed
+
+            raise HostClickFailed(
+                f"Could not dismiss the UAC dialog at ({x},{y}): the Secure-Desktop "
+                f"host service is not installed/reachable, or the routed click did not "
+                f"take. A local click cannot reach a UAC prompt."
+            )
         match button:
             case "left":
                 if clicks >= 2:
