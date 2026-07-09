@@ -7,7 +7,7 @@ Methods
 -------
 ping                → "pong"
 desktop_name        → str ("Default" | "Winlogon")
-uia_click_at        → bool — invoke element at (x, y); policy-gated when desktop=Winlogon
+uia_click_at        → bool — invoke element at (x, y); always consent-policy-gated
 wait_for_uac_prompt → dict | None — block until UAC fires (or timeout)
 policy_state        → dict — persisted Secure-Desktop policy + allowlist
 """
