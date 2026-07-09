@@ -100,6 +100,18 @@ def read_from_registry() -> SecureDesktopPolicy:
                 policy = _validate_policy(str(policy_raw))
             except FileNotFoundError:
                 policy = DEFAULT_POLICY
+            except ValueError as exc:
+                # A corrupt / foreign / wrong-type Policy value must fail closed to
+                # the default (block), per this function's "default on any failure"
+                # contract. Without this, _validate_policy's ValueError escapes to the
+                # caller as a misleading "host unreachable" error and nulls out the
+                # agent-visible policy_state. (from_env / resolve_install_time_policy
+                # deliberately still raise on a bad value -- those are config-time.)
+                logger.warning(
+                    "Invalid stored Policy value %r; defaulting to %s: %s",
+                    policy_raw, DEFAULT_POLICY, exc,
+                )
+                policy = DEFAULT_POLICY
             try:
                 allowlist_raw, _ = winreg.QueryValueEx(key, _REG_ALLOWLIST)
                 allowlist = [s for s in (allowlist_raw or []) if s]

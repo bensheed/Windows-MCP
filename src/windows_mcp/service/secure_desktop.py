@@ -1084,7 +1084,24 @@ def get_uac_publisher(consent_pid: int = 0) -> str | None:
                             "get_uac_publisher: ElementFromHandle(0x%x) failed: %s",
                             hwnd, exc,
                         )
+                if not roots:
+                    # We were asked to scope to consent.exe but could not resolve its
+                    # window. Fail CLOSED -- do NOT fall through to the GetRootElement
+                    # walk below, which enumerates EVERY top-level window on the input
+                    # desktop. The publisher string gates allow_with_match, so scraping
+                    # arbitrary windows would let any process on the desktop supply a
+                    # spoofed "Verified publisher:" line (a fail-open in a security
+                    # check). With no consent-scoped root, the safe answer is None.
+                    logger.warning(
+                        "get_uac_publisher: could not scope to consent.exe pid=%d; "
+                        "failing closed (returning no publisher)",
+                        consent_pid,
+                    )
+                    return None
             if not roots:
+                # consent_pid == 0 (pid unknown to the caller): fall back to the
+                # input-desktop walk. Callers in the policy path always supply the
+                # consent pid, so this branch is the best-effort no-pid case only.
                 root = iuia.GetRootElement()
                 child = walker.GetFirstChildElement(root)
                 while child:
